@@ -9,10 +9,12 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
-import { type AgentToolResult, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import type { Message } from "@earendil-works/pi-ai";
+import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { AgentsView } from "./agents-view.ts";
+import { subagentRegistry, type SubagentRecord, type SubagentStreamEvent } from "./registry.ts";
 
 const MAX_TASK_ARG_LENGTH = 4000;
 
@@ -42,8 +44,9 @@ async function runSubagent(
 	cwd: string,
 	task: string,
 	skills: string[],
+	record: SubagentRecord,
 	signal?: AbortSignal,
-	onUpdate?: (result: AgentToolResult) => void,
+	onUpdate?: (text: string) => void,
 ): Promise<string> {
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 
@@ -54,7 +57,7 @@ async function runSubagent(
 	let tmpDir: string | null = null;
 
 	try {
-		onUpdate?.({ content: [{ type: "text", text: "Subagent running..." }] });
+		onUpdate?.("Subagent running...");
 
 		tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
 		const promptFile = path.join(tmpDir, "prompt.md");
@@ -84,18 +87,19 @@ async function runSubagent(
 		let turnCount = 0;
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
-			let event: any;
+			let event: SubagentStreamEvent;
 			try {
 				event = JSON.parse(line);
 			} catch {
 				return;
 			}
+			subagentRegistry.ingest(record, event);
 			if (event.type === "message_end" && event.message) {
 				const msg = event.message as Message & { content: any[] };
 				messages.push(msg);
 				if (msg.role === "assistant" && onUpdate) {
 					turnCount++;
-					const toolCalls = (msg.content ?? []).filter((c: any) => c.type === "toolCall");
+					const toolCalls = (msg.content ?? []).filter((c: any) => c.type === "toolCall") as Array<{ name: string }>;
 					const textParts = (msg.content ?? [])
 						.filter((c: any) => c.type === "text")
 						.map((c: any) => c.text)
@@ -115,7 +119,7 @@ async function runSubagent(
 						const preview = textParts.length > 60 ? textParts.slice(0, 60) + "..." : textParts;
 						updateText += `\n${preview}`;
 					}
-					onUpdate({ content: [{ type: "text", text: updateText }] });
+					onUpdate(updateText);
 				}
 			}
 		};
@@ -208,16 +212,20 @@ export default function (pi: ExtensionAPI) {
 		parameters: SubagentParams,
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const record = subagentRegistry.create(params.task, params.skills ?? []);
+			const report = (text: string) => onUpdate?.({ content: [{ type: "text", text }], details: {} });
 			try {
-				const output = await runSubagent(ctx.cwd, params.task, params.skills ?? [], signal, onUpdate);
+				const output = await runSubagent(ctx.cwd, params.task, params.skills ?? [], record, signal, report);
+				subagentRegistry.finish(record);
 				return {
 					content: [{ type: "text", text: output || "(no output)" }],
+					details: {},
 				};
 			} catch (err: any) {
-				return {
-					content: [{ type: "text", text: err.message || String(err) }],
-					isError: true,
-				};
+				subagentRegistry.fail(record, err.message || String(err));
+				// Throw so the agent loop produces a properly flagged error result
+				// (a returned isError is ignored by the loop in this pi version).
+				throw err instanceof Error ? err : new Error(String(err));
 			}
 		},
 
@@ -240,6 +248,37 @@ export default function (pi: ExtensionAPI) {
 			const separator = theme.fg("muted", "--- Result ---");
 			const text = `${marker}${separator}\n${output}`;
 			return new Text(text, 0, 0);
+		},
+	});
+
+	pi.registerCommand("agents", {
+		description: "Browse subagents spawned in this session (read-only)",
+		handler: async (_args, ctx) => {
+			if (subagentRegistry.count() === 0) {
+				ctx.ui.notify("No subagents have been spawned in this session.", "info");
+				return;
+			}
+			if (!ctx.hasUI) {
+				ctx.ui.notify("/agents requires an interactive session.", "info");
+				return;
+			}
+			await ctx.ui.custom<void>(
+				(tui, theme, _keybindings, done) => {
+					const view = new AgentsView(tui, theme, done);
+					return {
+						render: (width: number) => view.render(width),
+						handleInput: (data: string) => {
+							view.handleInput(data);
+							tui.requestRender();
+						},
+						invalidate: () => view.invalidate(),
+					};
+				},
+				{
+					overlay: true,
+					overlayOptions: { width: "90%", maxHeight: "95%", anchor: "center" },
+				},
+			);
 		},
 	});
 }

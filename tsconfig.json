@@ -4,10 +4,11 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "types/**/*.d.ts"]
+  "include": ["index.ts", "registry.ts", "agents-view.ts", "types/**/*.d.ts"]
 }
