@@ -295,7 +295,39 @@ export class AgentsView implements Component {
 	}
 
 	render(width: number): string[] {
-		return this.mode === "list" ? this.renderList(width) : this.renderDetail(width);
+		const rows = this.tui.terminal.rows;
+		// The overlay is full-screen; the panel floats centered on a dimmed wash.
+		const panelWidth = Math.min(width - 2, Math.max(30, Math.floor(width * 0.9)));
+		const innerWidth = panelWidth - 4;
+		const content = this.mode === "list" ? this.renderList(innerWidth) : this.renderDetail(innerWidth);
+		return this.composeScreen(content, width, panelWidth, rows);
+	}
+
+	/** Full-screen dimmed wash with the bordered panel floating centered on it. */
+	private composeScreen(content: string[], width: number, panelWidth: number, rows: number): string[] {
+		const border = (text: string) => this.theme.fg("borderAccent", text);
+		const wash = (text: string) => this.theme.bg("toolPendingBg", text);
+		const blank = wash(" ".repeat(width));
+
+		const panel: string[] = [];
+		panel.push(border(`╭${"─".repeat(panelWidth - 2)}╮`));
+		for (const line of content) {
+			const inner = truncateToWidth(line, panelWidth - 4, " ", true);
+			panel.push(`${border("│ ")}${inner}${border(" │")}`);
+		}
+		panel.push(border(`╰${"─".repeat(panelWidth - 2)}╯`));
+
+		const padTop = Math.max(0, Math.floor((rows - panel.length) / 2));
+		const marginLeft = Math.floor((width - panelWidth) / 2);
+		const marginRight = Math.max(0, width - panelWidth - marginLeft);
+
+		const lines: string[] = [];
+		for (let i = 0; i < padTop; i++) lines.push(blank);
+		for (const line of panel) {
+			lines.push(`${wash(" ".repeat(marginLeft))}${line}${wash(" ".repeat(marginRight))}`);
+		}
+		while (lines.length < rows) lines.push(blank);
+		return lines.slice(0, rows);
 	}
 
 	private close(): void {
@@ -399,7 +431,9 @@ export class AgentsView implements Component {
 	}
 
 	private viewportHeight(): number {
-		const overhead = 7; // 3 header + 3 footer + 1 safety margin
+		// 3 header + 3 footer lines inside the panel, plus 2 border rows and
+		// breathing room for vertical centering on the full-screen wash.
+		const overhead = 10;
 		return Math.max(4, this.tui.terminal.rows - overhead);
 	}
 

@@ -276,7 +276,7 @@ export default function (pi: ExtensionAPI) {
 				},
 				{
 					overlay: true,
-					overlayOptions: { width: "90%", maxHeight: "95%", anchor: "center" },
+					overlayOptions: { width: "100%", maxHeight: "100%", anchor: "center", margin: 0 },
 				},
 			);
 		},
