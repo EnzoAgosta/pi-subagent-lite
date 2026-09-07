@@ -16,10 +16,11 @@ Most subagent extensions ship with heavy abstractions: agent definition files, c
 
 - **Isolated context**: Each subagent runs in a separate `pi` process
 - **Live progress**: See turn-by-turn updates as the subagent works
+- **`/agents` command**: A read-only overlay to watch what every subagent spawned in the current session is doing (see below)
 - **Optional skills**: Preload capabilities via `--skill` flags
 - **Auto-spill**: Long tasks (>4000 chars) are automatically written to a temp file to avoid CLI limits
 - **Clean result rendering**: Final output is clearly marked with a `✓ --- Result ---` separator
-- **No recursive nesting**: When running inside a subagent process, the tool automatically unregisters itself so subagents cannot spawn further subagents
+- **No recursive nesting**: When running inside a subagent process, the tool never registers itself, so subagents cannot spawn further subagents
 
 ## Installation
 
@@ -57,6 +58,33 @@ Run a subagent with skills ["code-review"] to review src/auth.ts
 
 You can also invoke multiple subagents in parallel by making separate tool calls in the same turn.
 
+## Observing subagents: `/agents`
+
+Run `/agents` at any time — including while the agent is still working — to open a read-only overlay showing every subagent spawned in the current session:
+
+- **List view**: running subagents first (with a live activity line like `thinking…`, `writing…`, `calling read…`), finished ones below (✓ completed, ✗ failed, with duration and error message).
+- **Detail view**: enter with `→` or `Enter` to read a subagent's full thread — its task, reasoning, tool calls with arguments, and tool results — rendered like a normal pi transcript. It tail-follows while the subagent is still running.
+
+Keybindings:
+
+| Context | Keys | Action |
+|---------|------|--------|
+| List | `↑` / `↓` | Move selection |
+| List | `→` / `Enter` | Open detail view |
+| List | `←` / `Esc` | Close the overlay |
+| Detail | `↑` / `↓` | Scroll one line |
+| Detail | `PgUp` / `PgDn` | Scroll half a page |
+| Detail | `Home` / `End` | Jump to top / bottom |
+| Detail | `ctrl+o` | Toggle tool output (collapsed by default) |
+| Detail | `ctrl+t` | Toggle thinking blocks (collapsed by default) |
+| Detail | `←` / `Esc` | Back to the list |
+
+Notes:
+
+- **Strictly read-only** — you cannot interact with running subagents, only observe. To steer the main agent, close the overlay and type normally.
+- **Per-session scope** — the overlay only shows subagents spawned in the current session. Running `/reload`, `/new`, or `/resume` starts fresh, so older subagents are not listed.
+- If no subagent has been spawned yet, `/agents` simply says so.
+
 ## Tool Parameters
 
 | Parameter | Type | Required | Description |
@@ -64,6 +92,17 @@ You can also invoke multiple subagents in parallel by making separate tool calls
 | `task` | `string` | Yes | The task to delegate to the subagent |
 | `skills` | `string[]` | No | Optional skill paths or names to load via `--skill` |
 
+## Development
+
+This fork adds the `/agents` observer on top of upstream. Layout:
+
+- `index.ts` — tool registration, subagent process lifecycle
+- `registry.ts` — in-memory registry of subagent records, fed by each subagent's JSON stream
+- `agents-view.ts` — the `/agents` overlay (list + detail views)
+- `scripts/preview-agents.mts` — headless render harness: `node scripts/preview-agents.mts`
+
+Typecheck with `npx tsc --noEmit`. Ideas and known gaps live in [ideas.md](ideas.md).
+
 ## License
 
-MIT © jerryan
+MIT © jerryan (upstream); fork changes MIT as well.

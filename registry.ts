@@ -68,6 +68,8 @@ export const subagentRegistry = {
 
 	/** Fold one stream event into a record. Cheap; called once per stream line. */
 	ingest(record: SubagentRecord, event: SubagentStreamEvent): void {
+		// Invariant guard: never resurrect streaming state on a settled record.
+		if (record.status !== "running") return;
 		if (event.type === "message_end" && event.message) {
 			record.turns.push(event.message);
 			if (event.message.role === "assistant") {
