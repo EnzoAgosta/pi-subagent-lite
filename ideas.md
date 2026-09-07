@@ -6,14 +6,18 @@ Items are roughly ordered by value-per-effort.
 
 ## Registry / data layer
 
-- **Stream-event coverage gaps in the activity state machine.**
-  `ingest()` handles 5 of 11 assistant stream event types. The meaningful
-  gap: `toolcall_delta` — during a long tool-argument stream (e.g. a big
-  `write` payload) the label stays `writing…` instead of
-  `calling write…`. `thinking_end` / `text_end` leave stale labels
-  briefly (cosmetic). `tool_execution_start` from the top-level events is
-  unused; the model emits `toolcall_start` well before execution, so
-  `calling X…` currently covers a tool's run time accurately enough.
+- **JSON-mode streams are delta-only (recorded finding).** The `pi --mode json`
+  stream strips the SDK's cumulative `partial` snapshot from assistant events
+  (`message_update` carries only `contentIndex` + `delta`; `toolcall_start`
+  gains `id`/`toolName`; `text_end`/`thinking_end` carry full content;
+  `toolcall_end` carries the complete toolCall). Anything rendering live state
+  must assemble the partial itself — see `applyAssistantDelta` in registry.ts.
+- **Stream-event coverage gaps in the activity state machine.** The meaningful
+  gap (`toolcall_delta` leaving the label at `writing…` instead of
+  `calling X…`) is fixed. Remaining gaps are cosmetic: `thinking_end` /
+  `text_end` briefly leave a stale label until the next `*_start`; the top-level
+  `tool_execution_start` event is unused; `toolcall_start` already covers a
+  tool's run time accurately enough.
 - **Unbounded `turns` growth.** Records accumulate all messages for the
   session; judged harmless (per-subagent volume is small, and the full
   history is the feature). If it ever matters: stop ingesting
@@ -28,15 +32,6 @@ Items are roughly ordered by value-per-effort.
 
 ## View / interaction
 
-- **Live streaming of partial assistant messages (tier 1).** The plumbing
-  exists: `ingest()` stores `assistantMessageEvent.partial` into
-  `record.currentPartial` (currently write-only, reserved for this).
-  Wiring it in means: include the partial in `ThreadView`'s cache version,
-  render the in-flight assistant message below completed turns, and
-  coalesce invalidation (~100 ms) so per-token deltas don't thrash the
-  markdown re-wrap. Value is moderated by thinking/text being collapsed
-  by default — the payoff is mostly in the Ctrl+T-expanded state and in
-  seeing text stream in.
 - **List view scrolling.** The list doesn't scroll; with ~12+ subagents
   in one session, rows below the fold (and the hint bar) are unreachable,
   and selection can move into invisible rows. Fix with the same
@@ -56,10 +51,6 @@ Items are roughly ordered by value-per-effort.
 
 ## View rendering nits (logged, low priority)
 
-- Double invalidation mechanisms in `ThreadView`: the version-string
-  cache covers every registry mutation, making explicit `invalidate()`
-  calls belt-and-suspenders. Pick one (the version string is the robust
-  one). Caveat: the version assumes turns are append-only and immutable.
 - Ragged right edges between block kinds: assistant markdown renders at
   full width while user/thinking/tool content wraps 2–4 columns narrower.
 - `recordRow` message counts conflate toolResult messages with messages.
@@ -82,4 +73,3 @@ Items are roughly ordered by value-per-effort.
 - `types/*.d.ts` are dead `@mariozechner` shims (nothing imports those
   names anymore; tsc passes without them). Deletable, along with the
   tsconfig include entry.
-- Version bump + CHANGELOG entry for the `/agents` feature.

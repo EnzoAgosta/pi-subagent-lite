@@ -16,7 +16,7 @@ Most subagent extensions ship with heavy abstractions: agent definition files, c
 
 - **Isolated context**: Each subagent runs in a separate `pi` process
 - **Live progress**: See turn-by-turn updates as the subagent works
-- **`/agents` command**: A read-only overlay to watch what every subagent spawned in the current session is doing (see below)
+- **`/agents` command**: A read-only overlay to watch what every subagent spawned in the current session is doing, with live streaming of in-flight assistant messages (see below)
 - **Optional skills**: Preload capabilities via `--skill` flags
 - **Auto-spill**: Long tasks (>4000 chars) are automatically written to a temp file to avoid CLI limits
 - **Clean result rendering**: Final output is clearly marked with a `✓ --- Result ---` separator
@@ -63,7 +63,7 @@ You can also invoke multiple subagents in parallel by making separate tool calls
 Run `/agents` at any time — including while the agent is still working — to open a read-only overlay showing every subagent spawned in the current session:
 
 - **List view**: running subagents first (with a live activity line like `thinking…`, `writing…`, `calling read…`), finished ones below (✓ completed, ✗ failed, with duration and error message).
-- **Detail view**: enter with `→` or `Enter` to read a subagent's full thread — its task, reasoning, tool calls with arguments, and tool results — rendered like a normal pi transcript. It tail-follows while the subagent is still running.
+- **Detail view**: enter with `→` or `Enter` to read a subagent's full thread — its task, reasoning, tool calls with arguments, and tool results — rendered like a normal pi transcript. While the subagent is still running, the view tail-follows and streams the in-flight assistant message live: text renders as markdown as it arrives, collapsed thinking shows a live character count (expanding with `ctrl+t` streams the reasoning), and the footer activity label tracks `thinking…` / `writing…` / `calling <tool>…` states.
 
 Keybindings:
 
