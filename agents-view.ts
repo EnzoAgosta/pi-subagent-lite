@@ -24,15 +24,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { subagentRegistry, type SubagentRecord } from "./registry.ts";
-
-interface ContentBlock {
-	type: string;
-	text?: string;
-	thinking?: string;
-	name?: string;
-	arguments?: unknown;
-}
+import { subagentRegistry, type ContentBlock, type SubagentRecord } from "./registry.ts";
 
 function contentBlocks(message: Message): ContentBlock[] {
 	if (typeof message.content === "string") {
@@ -97,6 +89,20 @@ function listActivity(record: SubagentRecord, theme: Theme): string | null {
 	return theme.fg("dim", `Turn ${assistantTurnNumber(record, assistantIndex)}: ${label}${preview}`);
 }
 
+/** Cheap change-detection string for a subagent's in-flight partial message. */
+function partialFingerprint(record: SubagentRecord): string {
+	const partial = record.status === "running" ? record.currentPartial : null;
+	if (!partial) return "";
+	return contentBlocks(partial)
+		.map((block) => {
+			if (block.type === "text") return `t${block.text?.length ?? 0}`;
+			if (block.type === "thinking") return `k${block.thinking?.length ?? 0}`;
+			if (block.type === "toolCall") return `c${block.name ?? ""}`;
+			return "?";
+		})
+		.join("|");
+}
+
 /**
  * Renders the full message thread of one subagent. Lines are cached between
  * renders; Markdown blocks are kept as long-lived components so their
@@ -110,6 +116,10 @@ class ThreadView implements Component {
 	private readonly theme: Theme;
 	private readonly markdownTheme = getMarkdownTheme();
 	private readonly markdownBlocks = new Map<string, Markdown>();
+	/** Reused markdown components for the in-flight partial, keyed by block index. */
+	private readonly partialMarkdown = new Map<number, Markdown>();
+	/** The partial the partialMarkdown cache was built for; a new message clears it. */
+	private partialForMarkdown: Message | null = null;
 	private cachedLines: string[] | undefined;
 	private cachedWidth: number | undefined;
 	private cachedVersion = "";
@@ -124,7 +134,7 @@ class ThreadView implements Component {
 	}
 
 	render(width: number): string[] {
-		const version = `${this.record.turns.length}|${this.record.status}|${this.record.error ?? ""}|${this.showTools}|${this.showThinking}`;
+		const version = `${this.record.turns.length}|${this.record.status}|${this.record.error ?? ""}|${this.showTools}|${this.showThinking}|${partialFingerprint(this.record)}`;
 		if (this.cachedLines && this.cachedWidth === width && this.cachedVersion === version) {
 			return this.cachedLines;
 		}
@@ -157,6 +167,27 @@ class ThreadView implements Component {
 			}
 			lines.push("");
 		}
+		const partial = this.record.status === "running" ? this.record.currentPartial : null;
+		if (partial) {
+			// A new in-flight message invalidates the live markdown cache.
+			if (partial !== this.partialForMarkdown) {
+				this.partialForMarkdown = partial;
+				this.partialMarkdown.clear();
+			}
+			const blocks = contentBlocks(partial);
+			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+				const block = blocks[blockIndex];
+				if (!block) continue;
+				if (block.type === "thinking") {
+					lines.push(...this.renderThinking(block, width));
+				} else if (block.type === "text") {
+					lines.push(...this.renderLiveText(blockIndex, block, width));
+				} else if (block.type === "toolCall") {
+					lines.push(...this.renderToolCall(block, width));
+				}
+			}
+			lines.push("");
+		}
 		return lines;
 	}
 
@@ -171,6 +202,19 @@ class ThreadView implements Component {
 	private renderAssistantText(key: string, block: ContentBlock, width: number): string[] {
 		const markdown = this.markdownBlocks.get(key) ?? new Markdown(block.text ?? "", 0, 0, this.markdownTheme);
 		this.markdownBlocks.set(key, markdown);
+		return markdown.render(Math.max(10, width - 2)).map((line) => `  ${line}`);
+	}
+
+	/** Live streaming text: markdown through a reused component, mutated in place. */
+	private renderLiveText(blockIndex: number, block: ContentBlock, width: number): string[] {
+		const text = block.text ?? "";
+		let markdown = this.partialMarkdown.get(blockIndex);
+		if (!markdown) {
+			markdown = new Markdown(text, 0, 0, this.markdownTheme);
+			this.partialMarkdown.set(blockIndex, markdown);
+		} else {
+			markdown.setText(text);
+		}
 		return markdown.render(Math.max(10, width - 2)).map((line) => `  ${line}`);
 	}
 

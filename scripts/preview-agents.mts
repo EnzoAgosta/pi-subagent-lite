@@ -48,7 +48,17 @@ feed(running, {
 	} as any,
 });
 feed(running, { type: "message_end", message: { role: "toolResult", toolName: "bash", toolCallId: "c1", content: [{ type: "text", text: "src/auth.test.ts\nsrc/registry.test.ts\nsrc/agents-view.test.ts" }], isError: false, timestamp: Date.now() } as any });
-feed(running, { type: "message_update", assistantMessageEvent: { type: "toolcall_start", toolName: "read" } });
+
+// --- Subagent 1 continues: an in-flight assistant message (live streaming) ---
+feed(running, {
+	type: "message_start",
+	message: { role: "assistant", content: [], api: "test", provider: "test", model: "test", usage: {}, stopReason: "pending", timestamp: Date.now() } as any,
+});
+feed(running, { type: "message_update", assistantMessageEvent: { type: "thinking_start", contentIndex: 0 } });
+feed(running, { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "The bash result gives me three test files. Now I should open the first one to see what it covers." } });
+feed(running, { type: "message_update", assistantMessageEvent: { type: "thinking_end", contentIndex: 0, content: "The bash result gives me three test files. Now I should open the first one to see what it covers." } });
+feed(running, { type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 1 } });
+feed(running, { type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "Found **3 test files** in `src/`. The first covers " } });
 
 // --- Subagent 2: completed ---
 const done = subagentRegistry.create("Review src/auth.ts for security issues", []);
@@ -96,10 +106,14 @@ console.log(render(view.render(WIDTH)));
 console.log("\n" + "╔" + "═".repeat(WIDTH - 2) + "╗");
 console.log("║ /agents — DETAIL VIEW (running subagent)" + " ".repeat(WIDTH - 42) + "║");
 console.log("╚" + "═".repeat(WIDTH - 2) + "╝");
-view.handleInput("[B"); // down to second row (done)
-view.handleInput("[B"); // down to third row (failed)
-view.handleInput("[A"); // back up to done
-view.handleInput("[C"); // right → detail
+view.handleInput("\x1b[C"); // right → detail of the first (running) subagent
+console.log(render(view.render(WIDTH)));
+
+// --- Same detail view with thinking expanded (ctrl+t) ---
+console.log("\n" + "╔" + "═".repeat(WIDTH - 2) + "╗");
+console.log("║ /agents — DETAIL VIEW (thinking expanded)" + " ".repeat(WIDTH - 42) + "║");
+console.log("╚" + "═".repeat(WIDTH - 2) + "╝");
+view.handleInput("\x14"); // ctrl+t → expand thinking
 console.log(render(view.render(WIDTH)));
 
 console.log("\n(ok)");

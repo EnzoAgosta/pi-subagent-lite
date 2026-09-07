@@ -25,20 +25,44 @@ export interface SubagentRecord {
 	turns: Message[];
 	/** Live one-line activity while streaming ("thinking…", "calling read…"). */
 	activity: string | null;
-	/** Assembled in-progress assistant message (kept for future live rendering). */
+	/** In-progress assistant message, rebuilt from stream deltas for live rendering. */
 	currentPartial: Message | null;
 	/** Populated when status is "error". */
 	error?: string;
 }
 
-/** One event from a subagent's `pi --mode json` stdout stream. */
+/** One content block of an assistant message (subset of the pi-ai shapes). */
+export interface ContentBlock {
+	type: string;
+	text?: string;
+	thinking?: string;
+	id?: string;
+	name?: string;
+	arguments?: unknown;
+}
+
+/**
+ * One event from a subagent's `pi --mode json` stdout stream.
+ *
+ * JSON mode strips the SDK's cumulative `partial` snapshot from assistant
+ * streaming events to keep the stream size linear, so deltas must be assembled
+ * client-side (see applyAssistantDelta).
+ */
 export interface SubagentStreamEvent {
 	type: string;
 	message?: Message;
 	assistantMessageEvent?: {
 		type: string;
+		contentIndex?: number;
+		delta?: string;
+		/** Full accumulated content; present on `text_end` / `thinking_end`. */
+		content?: string;
+		/** Tool-call id; present on `toolcall_start`. */
+		id?: string;
+		/** Tool name; present on `toolcall_start`. */
 		toolName?: string;
-		partial?: Message;
+		/** Complete tool call; present on `toolcall_end`. */
+		toolCall?: ContentBlock & { type: "toolCall" };
 	};
 }
 
@@ -47,6 +71,81 @@ const listeners = new Set<() => void>();
 
 function notify(): void {
 	for (const listener of listeners) listener();
+}
+
+const STREAM_NOTIFY_THROTTLE_MS = 100;
+let throttledNotifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Coalesced registry notification: at most one render kick per throttle window. */
+function notifyThrottled(): void {
+	if (throttledNotifyTimer !== null) return;
+	throttledNotifyTimer = setTimeout(() => {
+		throttledNotifyTimer = null;
+		notify();
+	}, STREAM_NOTIFY_THROTTLE_MS);
+}
+
+/**
+ * Append one assistant stream event onto the record's in-progress message.
+ * JSON mode strips cumulative snapshots, so the partial is rebuilt here:
+ * `message_start` provides the skeleton, deltas append at `contentIndex`, and
+ * the `*_end` events (which carry full content) correct any drift.
+ */
+function applyAssistantDelta(
+	record: SubagentRecord,
+	event: NonNullable<SubagentStreamEvent["assistantMessageEvent"]>,
+): void {
+	const partial = record.currentPartial;
+	if (!partial) return;
+	const content = partial.content as ContentBlock[];
+	const index = event.contentIndex ?? 0;
+	while (content.length < index) content.push({ type: "text", text: "" });
+	const block = content[index];
+	switch (event.type) {
+		case "text_start":
+			content[index] = { type: "text", text: "" };
+			break;
+		case "text_delta":
+			if (block?.type === "text") block.text = (block.text ?? "") + (event.delta ?? "");
+			break;
+		case "text_end":
+			if (block?.type === "text") block.text = event.content ?? block.text ?? "";
+			break;
+		case "thinking_start":
+			content[index] = { type: "thinking", thinking: "" };
+			break;
+		case "thinking_delta":
+			if (block?.type === "thinking") block.thinking = (block.thinking ?? "") + (event.delta ?? "");
+			break;
+		case "thinking_end":
+			if (block?.type === "thinking") block.thinking = event.content ?? block.thinking ?? "";
+			break;
+		case "toolcall_start":
+			content[index] = { type: "toolCall", id: event.id ?? "", name: event.toolName ?? "tool", arguments: {} };
+			break;
+		case "toolcall_delta":
+			// Arguments stream as raw JSON fragments; the complete toolCall arrives
+			// on toolcall_end, so leave the named placeholder untouched until then.
+			break;
+		case "toolcall_end":
+			if (event.toolCall) content[index] = event.toolCall;
+			break;
+	}
+}
+
+/** One-line activity label for an assistant stream event. */
+function streamActivity(
+	record: SubagentRecord,
+	event: NonNullable<SubagentStreamEvent["assistantMessageEvent"]>,
+): string | null {
+	if (event.type === "thinking_start" || event.type === "thinking_delta") return "thinking…";
+	if (event.type === "text_start" || event.type === "text_delta") return "writing…";
+	if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
+		const block = (record.currentPartial?.content as ContentBlock[] | undefined)?.[event.contentIndex ?? 0];
+		const toolName = event.toolName ?? (block?.type === "toolCall" ? block.name : undefined) ?? "tool";
+		return `calling ${toolName}…`;
+	}
+	return record.activity;
 }
 
 export const subagentRegistry = {
@@ -70,6 +169,15 @@ export const subagentRegistry = {
 	ingest(record: SubagentRecord, event: SubagentStreamEvent): void {
 		// Invariant guard: never resurrect streaming state on a settled record.
 		if (record.status !== "running") return;
+		if (event.type === "message_start" && event.message) {
+			// Assistant message_start carries the full skeleton (empty content):
+			// the base we append streaming deltas onto.
+			if (event.message.role === "assistant") {
+				record.currentPartial = structuredClone(event.message);
+				notify();
+			}
+			return;
+		}
 		if (event.type === "message_end" && event.message) {
 			record.turns.push(event.message);
 			if (event.message.role === "assistant") {
@@ -82,19 +190,15 @@ export const subagentRegistry = {
 
 		if (event.type === "message_update" && event.assistantMessageEvent) {
 			const streamEvent = event.assistantMessageEvent;
-			record.currentPartial = streamEvent.partial ?? record.currentPartial;
-			const activity =
-				streamEvent.type === "thinking_start" || streamEvent.type === "thinking_delta"
-					? "thinking…"
-					: streamEvent.type === "text_start" || streamEvent.type === "text_delta"
-						? "writing…"
-						: streamEvent.type === "toolcall_start"
-							? `calling ${streamEvent.toolName ?? "tool"}…`
-							: record.activity;
+			applyAssistantDelta(record, streamEvent);
+			const activity = streamActivity(record, streamEvent);
 			if (activity !== record.activity) {
 				record.activity = activity;
 				notify();
+				return;
 			}
+			// Delta content changes are frequent; coalesce render kicks.
+			notifyThrottled();
 		}
 	},
 
