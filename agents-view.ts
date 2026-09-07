@@ -89,15 +89,29 @@ function listActivity(record: SubagentRecord, theme: Theme): string | null {
 	return theme.fg("dim", `Turn ${assistantTurnNumber(record, assistantIndex)}: ${label}${preview}`);
 }
 
+/** Tiny FNV-style hash, enough change detection for streaming text (covers same-length corrections). */
+function textHash(text: string): string {
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < text.length; index++) {
+		hash = ((hash ^ text.charCodeAt(index)) * 0x01000193) | 0;
+	}
+	return (hash >>> 0).toString(36);
+}
+
 /** Cheap change-detection string for a subagent's in-flight partial message. */
 function partialFingerprint(record: SubagentRecord): string {
 	const partial = record.status === "running" ? record.currentPartial : null;
 	if (!partial) return "";
 	return contentBlocks(partial)
 		.map((block) => {
-			if (block.type === "text") return `t${block.text?.length ?? 0}`;
-			if (block.type === "thinking") return `k${block.thinking?.length ?? 0}`;
-			if (block.type === "toolCall") return `c${block.name ?? ""}`;
+			if (block.type === "text") return `t${textHash(block.text ?? "")}`;
+			if (block.type === "thinking") return `k${textHash(block.thinking ?? "")}`;
+			if (block.type === "toolCall") {
+				// Length rather than hash: arguments are replaced wholesale on
+				// toolcall_end, and lengths almost certainly differ then.
+				const argsLength = block.arguments === undefined ? "?" : JSON.stringify(block.arguments).length;
+				return `c${block.name ?? ""}:${argsLength}`;
+			}
 			return "?";
 		})
 		.join("|");
@@ -168,12 +182,13 @@ class ThreadView implements Component {
 			lines.push("");
 		}
 		const partial = this.record.status === "running" ? this.record.currentPartial : null;
+		// Identity check doubles as cache cleanup: a new in-flight message replaces
+		// the live markdown cache, and the partial going null clears it too.
+		if (partial !== this.partialForMarkdown) {
+			this.partialForMarkdown = partial;
+			this.partialMarkdown.clear();
+		}
 		if (partial) {
-			// A new in-flight message invalidates the live markdown cache.
-			if (partial !== this.partialForMarkdown) {
-				this.partialForMarkdown = partial;
-				this.partialMarkdown.clear();
-			}
 			const blocks = contentBlocks(partial);
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
 				const block = blocks[blockIndex];
@@ -271,7 +286,8 @@ export class AgentsView implements Component {
 		this.theme = theme;
 		this.done = done;
 		this.unsubscribe = subagentRegistry.subscribe(() => {
-			this.threadView?.invalidate();
+			// No blanket invalidate: ThreadView's version fingerprint (which covers
+			// the partial) decides whether its line cache is stale.
 			tui.requestRender();
 		});
 	}

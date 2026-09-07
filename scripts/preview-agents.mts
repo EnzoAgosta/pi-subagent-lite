@@ -35,7 +35,7 @@ const running = subagentRegistry.create(
 	["code-review"],
 );
 feed(running, { type: "message_end", message: { role: "user", content: [{ type: "text", text: "Task: Find all test files in src/ and summarize what they cover" }], timestamp: Date.now() } as any });
-feed(running, { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "..." } });
+feed(running, { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "..." } });
 feed(running, {
 	type: "message_end",
 	message: {
@@ -114,6 +114,15 @@ console.log("\n" + "╔" + "═".repeat(WIDTH - 2) + "╗");
 console.log("║ /agents — DETAIL VIEW (thinking expanded)" + " ".repeat(WIDTH - 42) + "║");
 console.log("╚" + "═".repeat(WIDTH - 2) + "╝");
 view.handleInput("\x14"); // ctrl+t → expand thinking
+console.log(render(view.render(WIDTH)));
+
+// --- Detail of a finished subagent ---
+view.handleInput("\x1b"); // Esc → back to list
+view.handleInput("\x1b[B"); // down → done record
+view.handleInput("\x1b[C"); // right → detail
+console.log("\n" + "╔" + "═".repeat(WIDTH - 2) + "╗");
+console.log("║ /agents — DETAIL VIEW (finished subagent)" + " ".repeat(WIDTH - 42) + "║");
+console.log("╚" + "═".repeat(WIDTH - 2) + "╝");
 console.log(render(view.render(WIDTH)));
 
 console.log("\n(ok)");

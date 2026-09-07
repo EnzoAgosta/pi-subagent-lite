@@ -53,7 +53,8 @@ export interface SubagentStreamEvent {
 	message?: Message;
 	assistantMessageEvent?: {
 		type: string;
-		contentIndex?: number;
+		/** Content block index; always present on delta events in JSON mode. */
+		contentIndex: number;
 		delta?: string;
 		/** Full accumulated content; present on `text_end` / `thinking_end`. */
 		content?: string;
@@ -98,7 +99,7 @@ function applyAssistantDelta(
 	const partial = record.currentPartial;
 	if (!partial) return;
 	const content = partial.content as ContentBlock[];
-	const index = event.contentIndex ?? 0;
+	const index = event.contentIndex;
 	while (content.length < index) content.push({ type: "text", text: "" });
 	const block = content[index];
 	switch (event.type) {
@@ -141,7 +142,7 @@ function streamActivity(
 	if (event.type === "thinking_start" || event.type === "thinking_delta") return "thinking…";
 	if (event.type === "text_start" || event.type === "text_delta") return "writing…";
 	if (event.type === "toolcall_start" || event.type === "toolcall_delta") {
-		const block = (record.currentPartial?.content as ContentBlock[] | undefined)?.[event.contentIndex ?? 0];
+		const block = (record.currentPartial?.content as ContentBlock[] | undefined)?.[event.contentIndex];
 		const toolName = event.toolName ?? (block?.type === "toolCall" ? block.name : undefined) ?? "tool";
 		return `calling ${toolName}…`;
 	}
