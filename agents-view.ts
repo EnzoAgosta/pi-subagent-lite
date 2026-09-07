@@ -74,6 +74,15 @@ function lastAssistantIndex(record: SubagentRecord): number {
 	return -1;
 }
 
+/** 1-based number of an assistant turn among assistant turns only. */
+function assistantTurnNumber(record: SubagentRecord, turnIndex: number): number {
+	let count = 0;
+	for (let index = 0; index <= turnIndex; index++) {
+		if (record.turns[index].role === "assistant") count++;
+	}
+	return count;
+}
+
 /** Index of the most recent user-visible line of activity for the list row. */
 function listActivity(record: SubagentRecord, theme: Theme): string | null {
 	if (record.status === "error") return null;
@@ -85,7 +94,7 @@ function listActivity(record: SubagentRecord, theme: Theme): string | null {
 	const label = tools || "responded";
 	const previewLine = textOf(turn).replace(/\s+/g, " ").trim();
 	const preview = previewLine ? ` · ${previewLine}` : "";
-	return theme.fg("dim", `Turn ${assistantIndex}: ${label}${preview}`);
+	return theme.fg("dim", `Turn ${assistantTurnNumber(record, assistantIndex)}: ${label}${preview}`);
 }
 
 /**
@@ -203,7 +212,8 @@ class ThreadView implements Component {
 
 export class AgentsView implements Component {
 	private mode: "list" | "detail" = "list";
-	private selected = 0;
+	/** Selected record id, so selection survives reordering (running → settled). */
+	private selectedId: string | null = null;
 	private detailRecordId: string | null = null;
 	private threadView: ThreadView | null = null;
 	private scrollView: ScrollView | null = null;
@@ -245,12 +255,14 @@ export class AgentsView implements Component {
 
 		if (this.mode === "list") {
 			const order = this.selectableOrder();
-			if (matchesKey(data, Key.up) && this.selected > 0) {
-				this.selected--;
-			} else if (matchesKey(data, Key.down) && this.selected < order.length - 1) {
-				this.selected++;
-			} else if ((matchesKey(data, Key.right) || matchesKey(data, Key.enter)) && order[this.selected]) {
-				this.openDetail(order[this.selected].id);
+			const currentIndex = this.selectedIndex(order);
+			if (matchesKey(data, Key.up) && currentIndex > 0) {
+				this.selectedId = order[currentIndex - 1].id;
+			} else if (matchesKey(data, Key.down) && currentIndex < order.length - 1) {
+				this.selectedId = order[currentIndex + 1].id;
+			} else if (matchesKey(data, Key.right) || matchesKey(data, Key.enter)) {
+				const record = order[currentIndex];
+				if (record) this.openDetail(record.id);
 			}
 			return;
 		}
@@ -300,6 +312,11 @@ export class AgentsView implements Component {
 		];
 	}
 
+	private selectedIndex(order: SubagentRecord[]): number {
+		const index = this.selectedId ? order.findIndex((record) => record.id === this.selectedId) : -1;
+		return index === -1 ? 0 : index;
+	}
+
 	private openDetail(recordId: string): void {
 		const record = subagentRegistry.get(recordId);
 		if (!record) return;
@@ -311,17 +328,15 @@ export class AgentsView implements Component {
 
 	private renderList(width: number): string[] {
 		const order = this.selectableOrder();
-		this.selected = Math.min(this.selected, Math.max(0, order.length - 1));
+		const selectedIndex = this.selectedIndex(order);
 		const running = order.filter((record) => record.status === "running");
 		const settled = order.filter((record) => record.status !== "running");
 
 		const lines: string[] = [];
-		const runningCount = running.length;
-		const settledCount = settled.length;
 		lines.push(
 			truncateToWidth(
 				this.theme.bold(
-					`Subagents — ${runningCount} running, ${settledCount} finished`,
+					`Subagents — ${running.length} running, ${settled.length} finished`,
 				),
 				width,
 			),
@@ -330,16 +345,16 @@ export class AgentsView implements Component {
 
 		let selectableIndex = 0;
 		for (const record of running) {
-			lines.push(...this.recordRow(record, selectableIndex === this.selected, width));
+			lines.push(...this.recordRow(record, selectableIndex === selectedIndex, width));
 			selectableIndex++;
 		}
-		if (settledCount > 0) {
-			if (runningCount > 0) {
+		if (settled.length > 0) {
+			if (running.length > 0) {
 				lines.push(truncateToWidth(this.theme.fg("dim", "─".repeat(20)), width));
 				lines.push("");
 			}
 			for (const record of settled) {
-				lines.push(...this.recordRow(record, selectableIndex === this.selected, width));
+				lines.push(...this.recordRow(record, selectableIndex === selectedIndex, width));
 				selectableIndex++;
 			}
 		}
@@ -391,7 +406,11 @@ export class AgentsView implements Component {
 	private renderDetail(width: number): string[] {
 		const record = this.detailRecordId ? subagentRegistry.get(this.detailRecordId) : undefined;
 		if (!record || !this.threadView || !this.scrollView) {
-			// Record vanished (should not happen); fall back to the list.
+			// Unreachable today (records live for the session), but keep the view
+			// consistent if it ever happens.
+			this.detailRecordId = null;
+			this.threadView = null;
+			this.scrollView = null;
 			this.mode = "list";
 			return this.renderList(width);
 		}
@@ -416,8 +435,11 @@ export class AgentsView implements Component {
 		const viewport = this.viewportHeight();
 		const content = this.threadView.render(width - 2);
 		this.scrollView.updateLayout(content.length, viewport, () => this.tui.requestRender());
-		const body = this.scrollView.render(width - 2);
-		for (const line of body) lines.push(`  ${line}`);
+		// ScrollView.render() returns the child's full output; viewport clipping is
+		// done by pi-tui's layout engine, which a manually-driven ScrollView
+		// bypasses — so slice by scrollTop here.
+		const top = this.scrollView.scrollTop;
+		for (const line of content.slice(top, top + viewport)) lines.push(`  ${line}`);
 		while (lines.length < 3 + viewport) lines.push("");
 
 		lines.push(truncateToWidth(this.theme.fg("dim", "─".repeat(width)), width));

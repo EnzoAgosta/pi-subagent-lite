@@ -73,8 +73,8 @@ export const subagentRegistry = {
 			if (event.message.role === "assistant") {
 				record.currentPartial = null;
 				record.activity = null;
-				notify();
 			}
+			notify();
 			return;
 		}
 
