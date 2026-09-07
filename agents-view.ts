@@ -336,7 +336,7 @@ export class AgentsView implements Component {
 		if (!record) return;
 		this.detailRecordId = recordId;
 		this.threadView = new ThreadView(record, this.theme);
-		this.scrollView = new ScrollView(this.threadView, { follow: "end", scrollbar: "auto" });
+		this.scrollView = new ScrollView(this.threadView, { follow: "end" });
 		this.mode = "detail";
 	}
 
@@ -413,9 +413,10 @@ export class AgentsView implements Component {
 	}
 
 	private viewportHeight(): number {
-		// 3 header + 3 footer lines inside the panel, plus 2 border rows.
-		const overhead = 9;
-		return Math.max(4, this.tui.terminal.rows - overhead);
+		// Budget against the overlay's real height cap (maxHeight "95%"), not raw
+		// terminal rows — pi-tui hard-slices overlay output that exceeds it.
+		// 8 = 3 header + 3 footer lines inside the panel + 2 border rows.
+		return Math.max(4, Math.floor(this.tui.terminal.rows * 0.95) - 8);
 	}
 
 	private renderDetail(width: number): string[] {
@@ -448,7 +449,9 @@ export class AgentsView implements Component {
 		lines.push(truncateToWidth(this.theme.fg("dim", "─".repeat(width)), width));
 
 		const viewport = this.viewportHeight();
-		const content = this.threadView.render(width - 2);
+		// frame() gives the interior width − 4; the body prefix adds two spaces
+		// per line, so the thread itself renders at width − 6.
+		const content = this.threadView.render(width - 6);
 		this.scrollView.updateLayout(content.length, viewport, () => this.tui.requestRender());
 		// ScrollView.render() returns the child's full output; viewport clipping is
 		// done by pi-tui's layout engine, which a manually-driven ScrollView
